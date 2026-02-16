@@ -1,0 +1,40 @@
+name: manual-smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t deployment-test-app:ci .
+
+      - name: Run container
+        run: docker run -d --name deployment-test -p 3000:3000 -e APP_COMMIT_SHA=${GITHUB_SHA} deployment-test-app:ci
+
+      - name: Smoke test /health and /version
+        run: |
+          APP_VERSION=$(node -p "require('./package.json').version")
+          for i in {1..20}; do
+            if curl -fsS http://localhost:3000/health > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://localhost:3000/health > /dev/null
+          VERSION_JSON=$(curl -fsS http://localhost:3000/version)
+
+          echo "$VERSION_JSON" | grep -q '"version":"'$APP_VERSION'"'
+
+          if [ -n "${GITHUB_SHA:-}" ]; then
+            echo "$VERSION_JSON" | grep -q '"commit":"'$GITHUB_SHA'"'
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f deployment-test || true

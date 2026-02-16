@@ -1,0 +1,38 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: always
+    - when: never
+
+stages:
+  - smoke
+
+build-and-smoke:
+  stage: smoke
+  image: docker:27
+  services:
+    - name: docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - APP_VERSION=$(grep -m1 '"version"' package.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+    - docker build -t deployment-test-app:ci .
+    - docker run -d --name deployment-test -p 3000:3000 -e APP_COMMIT_SHA=${CI_COMMIT_SHA} deployment-test-app:ci
+    - |
+      for i in $(seq 1 20); do
+        if wget -qO- http://localhost:3000/health > /dev/null; then
+          break
+        fi
+        sleep 1
+      done
+      wget -qO- http://localhost:3000/health > /dev/null
+      VERSION_JSON=$(wget -qO- http://localhost:3000/version)
+      echo "$VERSION_JSON" | grep -q '"version":"'$APP_VERSION'"'
+      if [ -n "${CI_COMMIT_SHA:-}" ]; then
+        echo "$VERSION_JSON" | grep -q '"commit":"'$CI_COMMIT_SHA'"'
+      fi
+  after_script:
+    - docker rm -f deployment-test || true
+  rules:
+    - when: manual
